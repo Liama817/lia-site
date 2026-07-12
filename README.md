@@ -18,15 +18,15 @@ Three pages, no build step, Netlify-ready.
 
 Search the HTML files for `TODO`:
 
-1. All pages — sidebar photo: create `images/`, add your photo, swap the
-   `photo-placeholder` div for `<img class="photo" src="images/lia.jpg" alt="Lia" />`
+1. All pages — sidebar photo: create ``, add your photo, swap the
+   `photo-placeholder` div for `<img class="photo" src="lia.jpg" alt="Lia" />`
 2. All pages — sidebar links: Email, LinkedIn, GitHub, Substack
 3. `index.html` — hero email ("Reach out: ..."), footer links, Substack URLs,
    and an optional receipts line in About (add 1-2 real numbers when you
    have shareable ones — specifics do the convincing)
 4. `pound-cake-notebook.html` — live site URL (hero) + 2 screenshot
    placeholders → swap `<div class="img-placeholder">` for
-   `<img src="images/your-screenshot.png" alt="describe what's shown" />`
+   `<img src="your-screenshot.png" alt="describe what's shown" />`
 
 ## Customizing
 
