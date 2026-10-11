@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Rain Mirror</title>
+<meta name="description" content="A fogged, rain-wet mirror over your webcam. Breathe to fog it, pinch to write, make a fist to wipe.">
+<style>body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one full-bleed WebGL glass over the live camera; an intro card to start, then a small frosted control pill at the bottom. Single dark look by design. */
+:root{
+  --night:#0b0c0e;
+  --ink:#eef0f2;
+  --ink-dim:rgba(238,240,242,.74);
+  --pill:rgba(16,18,22,.64);
+  --line:rgba(255,255,255,.15);
+  --on:rgba(255,255,255,.2);
+  --breath:#bfe3ff;
+  --focus:#a9d6ff;
+  --ui:"Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%;background:var(--night);color:var(--ink);overflow:hidden;font-family:var(--ui)}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#glass{touch-action:none;
+  cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26'%3E%3Ccircle cx='13' cy='13' r='10' fill='none' stroke='white' stroke-opacity='.5' stroke-width='1.4'/%3E%3C/svg%3E") 13 13, crosshair}
+#ui{pointer-events:none}
+.hint{position:fixed;left:0;right:0;top:44%;margin:0;padding-inline:16px;text-align:center;pointer-events:none;
+  font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:var(--ink-dim);transition:opacity 1.4s ease}
+.hint.gone{opacity:0}
+
+.intro{position:fixed;inset:0;display:grid;place-items:center;padding-inline:16px;pointer-events:none}
+.card{pointer-events:auto;width:min(380px,100%);padding:26px 24px 22px;border-radius:24px;background:var(--pill);border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(18px) saturate(1.2);backdrop-filter:blur(18px) saturate(1.2)}
+.card h1{margin:0 0 6px;font-size:26px;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
+.card .sub{margin:0 0 18px;color:var(--ink-dim);font-size:14px;line-height:1.5}
+.how{list-style:none;margin:0 0 20px;padding:0;display:grid;gap:12px}
+.how li{display:grid;grid-template-columns:34px 1fr;gap:10px;align-items:center;font-size:14px;line-height:1.35}
+.how .g{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.1);font-size:17px}
+.how b{font-weight:600}
+.start{width:100%;font:600 15px/1 var(--ui);color:#111;background:var(--ink);border:0;border-radius:999px;padding:14px 18px;cursor:pointer}
+.note{margin:12px 0 0;font-size:12px;line-height:1.45;color:var(--ink-dim)}
+.note.err{color:#ffd2c2}
+.note.credit{margin-top:14px;opacity:.75}
+
+.bar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));
+  display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:4px;max-width:calc(100% - 32px);
+  padding:5px;border-radius:22px;background:var(--pill);border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(14px) saturate(1.3);backdrop-filter:blur(14px) saturate(1.3);transition:opacity .6s ease}
+.bar.quiet{opacity:.22}
+.bar:hover,.bar:focus-within{opacity:1}
+button{font:500 13px/1 var(--ui);color:var(--ink);background:transparent;border:0;border-radius:999px;padding:10px 14px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--on)}
+.bar button:hover{background:rgba(255,255,255,.1)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.rain{display:flex;align-items:center;gap:8px;padding:0 10px;font-size:13px;color:var(--ink-dim)}
+.rain input{width:84px;accent-color:var(--ink)}
+.sep{width:1px;height:20px;background:var(--line)}
+.meter{display:flex;align-items:center;gap:7px;padding:10px 12px;font-size:12px;color:var(--ink-dim)}
+.meter[aria-pressed="false"]{background:transparent;opacity:.45}
+.meter[aria-pressed="false"] .fill{width:0!important}
+.meter[aria-pressed="true"]{background:transparent}
+.meter .track{width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.15);overflow:hidden}
+.meter .fill{display:block;height:100%;width:0;background:var(--ink-dim);border-radius:2px;transition:width .08s linear}
+.meter.on{color:var(--breath)}
+.meter.on .fill{background:var(--breath)}
+.status{position:fixed;left:0;right:0;top:calc(14px + env(safe-area-inset-top,0px));text-align:center;pointer-events:none;padding-inline:16px}
+.status span{display:inline-block;font-size:12px;padding:7px 12px;border-radius:999px;background:var(--pill);border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);color:var(--ink-dim);transition:opacity .8s}
+.status span:empty{opacity:0}
+.brushpill{position:fixed;left:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:10px;
+  padding:9px 14px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.32);
+  -webkit-backdrop-filter:blur(14px) saturate(1.3);backdrop-filter:blur(14px) saturate(1.3);font-size:13px;color:var(--ink)}
+.brushpill input{width:96px;accent-color:#fff}
+@media (max-width:760px){.bar{bottom:calc(72px + env(safe-area-inset-bottom,0px))}}
+@media (max-width:420px){.sep{display:none}.rain input{width:64px}}
+@media (prefers-reduced-motion:reduce){.hint,.bar,.status span{transition:none}}
+</style>
+
+<canvas id="glass" aria-label="A fogged, rain-wet mirror showing your camera. Breathe on it to fog it; pinch or touch to write; open your hand to wipe."></canvas>
+<canvas id="ui"></canvas>
+<div class="status" aria-live="polite"><span id="status"></span></div>
+
+<div class="intro" id="intro">
+  <div class="card">
+    <h1>Rain Mirror</h1>
+    <p class="sub">A fogged, rain-wet glass with you behind it. Use it the way you'd use a real window.</p>
+    <ul class="how">
+      <li><span class="g" aria-hidden="true">≋</span><span><b>Breathe</b> toward the screen to fog the glass where your mouth is, or hold Space.</span></li>
+      <li><span class="g" aria-hidden="true">🤏</span><span><b>Pinch</b> thumb and index finger to write. Open them to lift the pen.</span></li>
+      <li><span class="g" aria-hidden="true">✊</span><span><b>Make a fist and swipe</b> to wipe a wide patch, like your sleeve.</span></li>
+    </ul>
+    <button class="start" id="start">Start camera</button>
+    <p class="note credit">Rain recording: “Rainy” by Ove Melaa (CC0).</p>
+    <p class="note" id="note">Asks for your camera and microphone. No video, audio or data ever leaves this device; everything runs in your browser.</p>
+  </div>
+</div>
+
+<label class="brushpill" id="brushPill" for="brush" hidden><span>brush</span><input id="brush" type="range" min="7" max="38" value="15"></label>
+<div class="bar" id="bar" hidden>
+  <button class="meter" id="meter" aria-pressed="true" title="Breathe on the glass to fog it. Tap to turn off."><span>Breath</span><span class="track"><i class="fill" id="meterFill"></i></span></button>
+  <span class="sep"></span>
+  <label class="rain" for="rain">Rain <input id="rain" type="range" min="0" max="1" step="0.01" value="0.6"></label>
+  <span class="sep"></span>
+  <button id="reset" title="Fresh glass, default rain and brush">Reset</button>
+  <button id="sound" aria-pressed="false">Sound</button>
+</div>
+
+<script>
+(() => {
+'use strict';
+const TAU = Math.PI * 2, rnd = Math.random;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; };
+
+const cv = document.getElementById('glass'), uiCv = document.getElementById('ui'), ui = uiCv.getContext('2d');
+const bar = document.getElementById('bar'), statusEl = document.getElementById('status');
+const intro = document.getElementById('intro'), note = document.getElementById('note');
+const meter = document.getElementById('meter'), meterFill = document.getElementById('meterFill');
+
+let rain = 0.6;
+try { const s = JSON.parse(localStorage.getItem('rain-mirror') || '{}'); if (typeof s.rain === 'number') rain = s.rain; } catch (e) {}
+const save = () => { try { localStorage.setItem('rain-mirror', JSON.stringify({ rain })); } catch (e) {} };
+
+const FOG_START = .82;     // fog on load: thick enough that your writing reads as clear glass
+const FOG_RATE = .12;      // how much each breath puff adds: lower = fog builds up more slowly
+const VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+
+let W, H, dpr, FD, fw, fh, ws;
+let mask, mc, water, wc, b1, b1c, b2, b2c, place, brush, soft, blob, dropSprites = [];
+let streakCv, sc, streaks = [], gust = .5, gustT = .5, gustNext = 4;
+let brushCss = 15, spaceHeld = false, saveReq = false, stream = null;
+let video = null, handLm = null, faceDet = null, lastVT = -1, faceN = 0, maskDirty = true, placeUploaded = false;
+let drops = [], beads = [], drips = [], pending = [];
+let lastWrite = -999, now = 0, last = 0, refogAcc = 0, spawnAcc = 0, manualFog = 0;
+const mouth = { x: 0, y: 0, set: false };
+const strokes = new Map(), hands = new Map();
+
+const setStatus = (t, ms) => { statusEl.textContent = t; if (ms) setTimeout(() => { if (statusEl.textContent === t) statusEl.textContent = ''; }, ms); };
+
+/* ================= GPU renderer ================= */
+const gl = cv.getContext('webgl', { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: false });
+const VS = `attribute vec2 p; void main(){ gl_Position = vec4(p, 0., 1.); }`;
+const FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D uVideo, uBlur, uMask, uWater, uStreak;
+uniform vec2 uRes, uScale, uBlurTexel, uMaskTexel;
+uniform float uMirror, uDpr;
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+
+// the reflection, crisp (what you see through clear glass and through water)
+vec3 sharp(vec2 s){
+  vec2 v = s; if (uMirror > .5) v.x = 1. - v.x;
+  v = (v - .5) * uScale + .5;
+  return texture2D(uVideo, clamp(v, .001, .999)).rgb;
+}
+// the reflection, heavily diffused (what light does passing through condensation)
+vec3 soft(vec2 uv){
+  vec2 t = uBlurTexel * 2.;
+  vec3 c = texture2D(uBlur, uv).rgb * .2;
+  c += texture2D(uBlur, uv + vec2( t.x, 0.)).rgb * .1;
+  c += texture2D(uBlur, uv + vec2(-t.x, 0.)).rgb * .1;
+  c += texture2D(uBlur, uv + vec2(0.,  t.y)).rgb * .1;
+  c += texture2D(uBlur, uv + vec2(0., -t.y)).rgb * .1;
+  c += texture2D(uBlur, uv + t).rgb * .1;
+  c += texture2D(uBlur, uv - t).rgb * .1;
+  c += texture2D(uBlur, uv + vec2(t.x, -t.y)).rgb * .1;
+  c += texture2D(uBlur, uv + vec2(-t.x, t.y)).rgb * .1;
+  return c;
+}
+// one tiny condensation droplet per grid cell (some cells empty)
+float micro(vec2 uv, float cellPx, float seed, float fill, out vec2 d){
+  vec2 p = uv * uRes / (cellPx * uDpr);
+  vec2 cell = floor(p), f = fract(p);
+  float on = step(1. - fill, hash(cell + seed));
+  vec2 c = vec2(.25 + .5 * hash(cell + seed + 1.7), .25 + .5 * hash(cell + seed + 4.3));
+  float rr = .1 + .22 * hash(cell + seed + 8.9);
+  d = (f - c) / rr;
+  return on * (1. - smoothstep(.7, 1., length(d)));
+}
+vec3 shadeDrop(vec3 base, vec2 n){
+  float nl = length(n);
+  base *= 1. - .55 * smoothstep(.5, 1., nl) * (.55 + .45 * clamp(-n.y, 0., 1.));  // dark rim, heavier on top
+  base += .2 * smoothstep(.2, .95, n.y) * (1. - smoothstep(.88, 1., nl));        // light focused into the bottom
+  vec3 N = normalize(vec3(n * 1.5, sqrt(max(0., 1. - nl * nl))));
+  vec3 Hh = normalize(vec3(-.35, -.55, .76) + vec3(0., 0., 1.));
+  base += pow(max(dot(N, Hh), 0.), 70.) * .95;                                    // specular glint
+  return base;
+}
+
+void main(){
+  vec2 uv = vec2(gl_FragCoord.x / uRes.x, 1. - gl_FragCoord.y / uRes.y);
+
+  // fog amount, and its slope (where a finger pushed water into a ridge)
+  float fog = texture2D(uMask, uv).a;
+  vec2 mt = uMaskTexel * 1.5;
+  vec2 g = vec2(texture2D(uMask, uv + vec2(mt.x, 0.)).a - texture2D(uMask, uv - vec2(mt.x, 0.)).a,
+                texture2D(uMask, uv + vec2(0., mt.y)).a - texture2D(uMask, uv - vec2(0., mt.y)).a);
+  float ridge = clamp(length(g) * 1.6, 0., 1.);
+
+  vec3 clear = sharp(uv - g * .006) * .97 + .015;
+  float sk = texture2D(uStreak, uv).a;
+  float cl = dot(clear, vec3(.299, .587, .114));
+  clear += sk * (.42 - .62 * cl);                     // rain beyond the glass: bright against dark, greyish against bright
+
+  // condensation: diffused, milky, slightly desaturated, made of grain and droplets
+  vec3 b = soft(uv) + sk * .06;
+  float lum = dot(b, vec3(.299, .587, .114));
+  vec3 fogCol = mix(b * 1.18, vec3(.949, .933, .906), .62);   // blurred view, brightened, mixed with warm white   // milkier: more light scattered, less of the scene
+  fogCol = mix(fogCol, vec3(dot(fogCol, vec3(.3333))), .1);
+  fogCol += (hash(floor(uv * uRes / max(1., uDpr))) - .5) * .02;
+
+  vec2 d1; float m1 = micro(uv, 11., 0., .55, d1);
+  vec2 d2; float m2 = micro(uv, 5., 31., .7, d2);
+  vec3 m1c = shadeDrop(mix(sharp(uv - d1 * 6. * uDpr / uRes), fogCol, .85) * 1.03, d1 * .9);
+  fogCol = mix(fogCol, m1c, m1 * .45);
+  fogCol = mix(fogCol, fogCol * .86 + .12 * (1. - smoothstep(.2, .9, length(d2))), m2 * .3);
+
+  vec3 col = mix(clear, fogCol, fog);
+  col = mix(col, col * .9 + .06, ridge * .5);   // a thin wet ridge where the fog was pushed aside
+
+  // water drops and beads: each one is a little lens showing the world upside down
+  vec4 w = texture2D(uWater, uv);
+  if (w.a > .004) {
+    vec3 wd = w.rgb / w.a;
+    vec2 n = (wd.rg - .5) * 2.;
+    float rpx = (wd.b * 255. + 1.) / 32. * 2.5 * uDpr;
+    vec3 dc = mix(sharp(uv - n * rpx * 3. / uRes) * 1.06, fogCol * 1.04, fog * .85);
+    dc = shadeDrop(dc, n);
+    col = mix(col, dc, clamp(w.a, 0., 1.));
+  }
+
+  vec2 q = uv - .5;
+  col *= 1. - .28 * pow(length(q) * 1.25, 2.4);
+  gl_FragColor = vec4(col, 1.);
+}`;
+
+let prog, loc = {}, tex = {};
+function initGL() {
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog); if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const pl = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl, 2, gl.FLOAT, false, 0, 0);
+  for (const n of ['uVideo', 'uBlur', 'uMask', 'uWater', 'uStreak', 'uRes', 'uScale', 'uBlurTexel', 'uMaskTexel', 'uMirror', 'uDpr']) loc[n] = gl.getUniformLocation(prog, n);
+  ['uVideo', 'uBlur', 'uMask', 'uWater', 'uStreak'].forEach((n, i) => {
+    const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+    gl.uniform1i(loc[n], i); tex[n] = { t, unit: i };
+  });
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);   // water and fog are drawn with soft edges; keep them premultiplied
+}
+function upload(name, src) { const x = tex[name]; gl.activeTexture(gl.TEXTURE0 + x.unit); gl.bindTexture(gl.TEXTURE_2D, x.t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src); }
+
+/* ================= sprites ================= */
+function buildSprites() {
+  // drop "normal map" sprites: RG = surface slope, B = size bucket, A = coverage.
+  // Drops on glass are flatter than spheres, so the slope stays gentle in the middle and steepens at the edge.
+  const S = 48;
+  for (let k = 0; k < 8; k++) {
+    const c = mk(S, S), x = c.getContext('2d'), id = x.createImageData(S, S), D = id.data;
+    for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+      const dx = (px + .5 - S / 2) / (S / 2 - 1), dy = (py + .5 - S / 2) / (S / 2 - 1), d = Math.hypot(dx, dy), i = (py * S + px) * 4;
+      if (d >= 1) continue;
+      const prof = Math.pow(d, 1.6), nx = d > 0 ? dx / d * prof : 0, ny = d > 0 ? dy / d * prof : 0;
+      D[i] = 128 + 127 * nx; D[i + 1] = 128 + 127 * ny; D[i + 2] = (k + 1) * 32 - 1; D[i + 3] = 255 * clamp((1 - d) * 12, 0, 1);
+    }
+    x.putImageData(id, 0, 0); dropSprites.push(c);
+  }
+  brush = mk(64, 64); const b = brush.getContext('2d');
+  let g = b.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, '#fff'); g.addColorStop(.6, '#fff'); g.addColorStop(.85, 'rgba(255,255,255,.6)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  b.fillStyle = g; b.fillRect(0, 0, 64, 64);
+
+  // fist wipe: one soft radial gradient
+  soft = mk(64, 64); const sp = soft.getContext('2d');
+  g = sp.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, '#fff'); g.addColorStop(.35, 'rgba(255,255,255,.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  sp.fillStyle = g; sp.fillRect(0, 0, 64, 64);
+  // breath blob: its softness is 0.6 of its radius
+  blob = mk(64, 64); const bp = blob.getContext('2d');
+  g = bp.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, '#fff'); g.addColorStop(.4, 'rgba(255,255,255,.75)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  bp.fillStyle = g; bp.fillRect(0, 0, 64, 64);
+}
+function buildPlaceholder() {
+  place = mk(W / 4, H / 4); const s = place.getContext('2d'), w = place.width, h = place.height;
+  const g = s.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#77736d'); g.addColorStop(.55, '#4a4845'); g.addColorStop(1, '#232427');
+  s.fillStyle = g; s.fillRect(0, 0, w, h);
+  const rg = s.createRadialGradient(w * .5, h * .4, 0, w * .5, h * .4, Math.min(w, h) * .55);
+  rg.addColorStop(0, 'rgba(255,214,170,0.35)'); rg.addColorStop(1, 'rgba(255,214,170,0)');
+  s.fillStyle = rg; s.fillRect(0, 0, w, h);
+  placeUploaded = false;
+}
+
+/* ================= layout ================= */
+function resize() {
+  const cw = innerWidth, ch = innerHeight, oldW = W, oldMask = mask;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (cw * ch * dpr * dpr > 3.6e6) dpr = Math.sqrt(3.6e6 / (cw * ch));
+  W = Math.round(cw * dpr); H = Math.round(ch * dpr);
+  cv.width = W; cv.height = H; uiCv.width = W; uiCv.height = H;
+  if (gl) gl.viewport(0, 0, W, H);
+  ws = Math.min(1, 1.25 / dpr);                       // water map at about screen-point resolution
+  water = mk(W * ws, H * ws); wc = water.getContext('2d');
+  FD = dpr * 1.25; fw = Math.ceil(W / FD); fh = Math.ceil(H / FD);
+  mask = mk(fw, fh); mc = mask.getContext('2d');
+  if (oldMask) mc.drawImage(oldMask, 0, 0, fw, fh); else { mc.fillStyle = `rgba(255,255,255,${FOG_START})`; mc.fillRect(0, 0, fw, fh); }
+  maskDirty = true;
+  streakCv = mk(W / 2, H / 2); sc = streakCv.getContext('2d');
+  b1 = mk(W / 10, H / 10); b1c = b1.getContext('2d');
+  b2 = mk(W / 26, H / 26); b2c = b2.getContext('2d');
+  if (oldW) { const k = W / oldW; for (const arr of [drops, beads, drips]) for (const d of arr) { d.x *= k; d.y *= k; d.r *= k; } }
+  if (!mouth.set) { mouth.x = W / 2; mouth.y = H * .62; mouth.set = true; }
+  buildPlaceholder();
+}
+
+function videoReady() { return video && video.readyState >= 2 && video.videoWidth; }
+function drawCover(c, w, h) {
+  if (!videoReady()) { c.drawImage(place, 0, 0, w, h); return; }
+  const vw = video.videoWidth, vh = video.videoHeight, k = Math.max(w / vw, h / vh), dw = vw * k, dh = vh * k;
+  c.save(); c.translate(w, 0); c.scale(-1, 1); c.drawImage(video, (w - dw) / 2, (h - dh) / 2, dw, dh); c.restore();
+}
+// camera-normalized point (0..1) → screen pixels, matching the mirrored cover fit
+function mapV(u, v) {
+  const vw = video.videoWidth, vh = video.videoHeight, k = Math.max(W / vw, H / vh), dw = vw * k, dh = vh * k;
+  return { x: W - ((W - dw) / 2 + u * dw), y: (H - dh) / 2 + v * dh, k };
+}
+
+/* ================= water simulation ================= */
+const areaK = () => (W * H) / (dpr * dpr) / (1280 * 800);
+// rain comes in waves: a gust value drifts toward a new target every few seconds
+function updateGust(dt) {
+  gustNext -= dt;
+  if (gustNext <= 0) { gustT = rnd() < .25 ? .85 + rnd() * .15 : rnd() * .7; gustNext = 5 + rnd() * 12; }
+  gust += (gustT - gust) * Math.min(1, dt * .5);
+}
+const rainNow = () => clamp(rain * (.65 + .7 * gust), 0, 1);
+function newStreak(anywhere) {
+  return { x: (rnd() * 1.3 - .2) * W, y: anywhere ? rnd() * H : -rnd() * H * .4, len: (30 + rnd() * 90) * dpr,
+           v: (1300 + rnd() * 1000) * dpr, a: .08 + rnd() * .24, w: (.8 + rnd() * 2.2) * dpr };
+}
+function updateStreaks(dt) {
+  const want = Math.round((rain < .02 ? 0 : 8 + 150 * rainNow()) * areaK());
+  while (streaks.length < want) streaks.push(newStreak(true));
+  if (streaks.length > want) streaks.length = want;
+  const wind = .1 + gust * .14;
+  sc.setTransform(1, 0, 0, 1, 0, 0); sc.clearRect(0, 0, streakCv.width, streakCv.height);
+  sc.setTransform(.5, 0, 0, .5, 0, 0); sc.strokeStyle = '#fff'; sc.lineCap = 'round';
+  for (const s of streaks) {
+    s.y += s.v * dt; s.x += s.v * wind * dt;
+    if (s.y - s.len > H) Object.assign(s, newStreak(false));
+    sc.globalAlpha = s.a; sc.lineWidth = s.w;
+    sc.beginPath(); sc.moveTo(s.x - s.len * wind, s.y - s.len); sc.lineTo(s.x, s.y); sc.stroke();
+  }
+  sc.globalAlpha = 1;
+}
+const targetDrops = () => Math.min(1600, (15 + 760 * rain * rain + 140 * rain) * areaK());
+// when the slider moves, the glass changes right away instead of drifting there
+function applyRain() {
+  const t = targetDrops();
+  if (drops.length > t) { for (let i = drops.length - 1; i >= 0 && drops.length > t; i--) if (!drops[i].slide || rnd() < .3) drops.splice(i, 1); }
+  else { let n = Math.min(400, t - drops.length); while (n-- > 0) spawnRain(); }
+}
+function spawnRain() {
+  const x = rnd() * W, y = rnd() * H, r = (1 + Math.pow(rnd(), 2.6 - rain) * (3.5 + 3.5 * rain)) * dpr;
+  for (const o of drops) {
+    const dx = o.x - x, dy = o.y - y, rr = o.r + r;
+    if (dx * dx + dy * dy < rr * rr) { o.r = Math.min(Math.sqrt(o.r * o.r + r * r), 11 * dpr); if (o.r > 4.6 * dpr && !o.slide) startSlide(o); return; }
+  }
+  const d = { x, y, r, slide: false, vy: 0, stall: 0, trail: 0 };
+  if (r > 4.6 * dpr && rnd() < .5) startSlide(d);
+  drops.push(d);
+  // an impact throws a few tiny satellite droplets
+  if (r > 2.4 * dpr && rnd() < .55) {
+    for (let i = 0, n = 2 + (rnd() * 4 | 0); i < n; i++) {
+      const a = rnd() * TAU, dd = r * (1.6 + rnd() * 2.2);
+      drops.push({ x: x + Math.cos(a) * dd, y: y + Math.sin(a) * dd * .8, r: (.5 + rnd() * .7) * dpr, slide: false, vy: 0, stall: 0, trail: 0 });
+    }
+  }
+}
+function startSlide(d) { d.slide = true; d.vy = 0; d.stall = rnd() * .8; d.trail = d.r; d.wx = (rnd() - .5) * .3; }
+function updateRain(dt) {
+  const k = areaK(), rate = (rain < .02 ? 0 : 1 + 110 * rainNow()) * k, maxD = targetDrops();
+  spawnAcc += dt * rate;
+  while (spawnAcc >= 1) { spawnAcc--; spawnRain(); }
+  const add = [];
+  for (const d of drops) {
+    if (!d.slide || d.dead) continue;
+    if (d.stall > 0) { d.stall -= dt; continue; }
+    d.vy = Math.min(d.vy + 500 * dpr * dt, (30 + (d.r / dpr) * 20) * dpr);
+    d.wx = clamp((d.wx || 0) + (rnd() - .5) * dt * 2.4, -.35, .35);
+    const dy = d.vy * dt; d.y += dy; d.x += d.wx * dy + (rnd() - .5) * .2 * dpr;
+    if (rnd() < dt * 1.4) { d.stall = rnd() * .35; d.vy *= .2; }
+    d.trail -= dy;
+    if (d.trail <= 0) { add.push({ x: d.x + (rnd() - .5) * d.r * .4, y: d.y - d.r * .9, r: d.r * (.18 + rnd() * .22), slide: false }); d.r *= .985; d.trail = d.r * (1 + rnd() * 2); }
+    for (const o of drops) {
+      if (o === d || o.dead) continue;
+      const dx = o.x - d.x, ddy = o.y - d.y, rr = d.r + o.r * .8;
+      if (dx * dx + ddy * ddy < rr * rr) { d.r = Math.min(Math.sqrt(d.r * d.r + o.r * o.r), 11 * dpr); o.dead = true; }
+    }
+    if (d.r < 3.4 * dpr) d.slide = false;
+  }
+  drops = drops.filter(d => !d.dead && d.y - d.r < H);
+  for (const a of add) drops.push(a);
+  let over = drops.length - maxD;
+  for (let i = 0; over > 0 && i < drops.length; i++) if (!drops[i].slide) { drops.splice(i, 1); i--; over--; }
+}
+
+/* fog mask: white = fogged. Wiping SUBTRACTS from it (destination-out); breath adds to it. */
+function wipeLine(x0, y0, x1, y1, r, a) {
+  const fr = r / FD, X0 = x0 / FD, Y0 = y0 / FD, X1 = x1 / FD, Y1 = y1 / FD;
+  const dist = Math.hypot(X1 - X0, Y1 - Y0);
+  const jump = dist > fw * .3;                       // a re-acquired hand, not a stroke: never paint a streak across the mirror
+  const steps = jump ? 0 : Math.min(40, Math.ceil(dist / (fr * .3)));
+  mc.globalCompositeOperation = 'destination-out'; mc.globalAlpha = a;
+  for (let i = 0; i <= steps; i++) { const t = steps ? i / steps : 1; mc.drawImage(brush, X0 + (X1 - X0) * t - fr, Y0 + (Y1 - Y0) * t - fr, 2 * fr, 2 * fr); }
+  mc.globalAlpha = 1; mc.globalCompositeOperation = 'source-over'; maskDirty = true;
+}
+function stampSoft(x, y, r, a) {
+  const R = r / FD;
+  mc.globalCompositeOperation = 'destination-out'; mc.globalAlpha = a;
+  mc.drawImage(soft, x / FD - R, y / FD - R, 2 * R, 2 * R);
+  mc.globalAlpha = 1; mc.globalCompositeOperation = 'source-over'; maskDirty = true;
+}
+function breathBlob(x, y, r, a) {
+  const R = r / FD;
+  mc.globalCompositeOperation = 'source-over'; mc.globalAlpha = clamp(a, 0, 1);
+  mc.drawImage(blob, x / FD - R, y / FD - R, 2 * R, 2 * R);
+  mc.globalAlpha = 1; maskDirty = true;
+}
+function resetFog() {
+  mc.globalCompositeOperation = 'source-over'; mc.clearRect(0, 0, fw, fh);
+  mc.fillStyle = `rgba(255,255,255,${FOG_START})`; mc.fillRect(0, 0, fw, fh); maskDirty = true;
+}
+
+function newStroke(x, y, r) { return { x, y, cx: x, cy: y, r, water: 0, need: 60 + rnd() * 120 }; }
+function moveStroke(st, x, y, speedDt) {
+  const dx = x - st.x, dy = y - st.y, dist = Math.hypot(dx, dy);
+  if (dist < .5) return;
+  if (dist > W * .3) { st.x = x; st.y = y; return; }
+  wipeLine(st.x, st.y, x, y, st.r, .97); lastWrite = now;
+  // water pushed aside beads up along both edges of the stroke
+  const nx = -dy / dist, ny = dx / dist, n = dist / (5 * dpr) * Math.min(1, 14 * dpr / st.r);
+  for (let i = 0; i < n; i++) {
+    if (rnd() > .6) continue;
+    const t = rnd(), px = st.x + dx * t, py = st.y + dy * t, side = rnd() < .5 ? -1 : 1;
+    if (rnd() < .82) { const off = st.r * (.85 + rnd() * .3); beads.push({ x: px + nx * off * side, y: py + ny * off * side, r: (.9 + Math.pow(rnd(), 2) * 2.6) * dpr, born: now }); }
+    else beads.push({ x: px + nx * st.r * rnd() * .7 * side, y: py + ny * st.r * rnd() * .7 * side, r: (.7 + rnd() * .8) * dpr, born: now });
+  }
+  // and it collects until gravity wins: a drip runs down from the stroke
+  st.water += dist / dpr * (st.r / (11 * dpr));
+  if (st.water > st.need) {
+    pending.push({ t: now + .6 + rnd() * 3.2, x: x + (rnd() - .5) * st.r * .6, y: y + st.r * .72, r: (2.4 + rnd() * 1.6) * dpr });
+    st.water = 0; st.need = 70 + rnd() * 170;
+  }
+  st.x = x; st.y = y;
+}
+// curve through the midpoint of each pair of points, so corners come out round instead of angular
+function curveTo(st, x, y, dt) {
+  const ex = (st.cx + x) / 2, ey = (st.cy + y) / 2, sx = st.x, sy = st.y;
+  const len = Math.hypot(st.cx - sx, st.cy - sy) + Math.hypot(ex - st.cx, ey - st.cy);
+  const n = Math.max(1, Math.min(24, Math.ceil(len / (3 * dpr))));
+  for (let i = 1; i <= n; i++) { const t = i / n, u = 1 - t; moveStroke(st, u * u * sx + 2 * u * t * st.cx + t * t * ex, u * u * sy + 2 * u * t * st.cy + t * t * ey, dt / n); }
+  st.cx = x; st.cy = y;
+}
+function endStroke(st) {
+  if (!st || st.r == null) return;
+  moveStroke(st, st.cx, st.cy, 0);
+  if (st.water > 30 && rnd() < .5) pending.push({ t: now + .8 + rnd() * 2.5, x: st.x, y: st.y + st.r * .72, r: (2.2 + rnd() * 1.2) * dpr });
+}
+function updateWater(dt) {
+  for (let i = pending.length - 1; i >= 0; i--) {
+    const p = pending[i];
+    if (now >= p.t) { drips.push({ x: p.x, y: p.y, r: p.r, v: (22 + rnd() * 60) * dpr, left: (60 + rnd() * rnd() * 560) * dpr, stall: 0, trail: p.r * 3, ph: rnd() * 9 }); pending.splice(i, 1); }
+  }
+  for (const d of drips) {
+    if (d.stall > 0) { d.stall -= dt; continue; }
+    const dy = d.v * (.55 + .45 * Math.sin(now * 6 + d.ph)) * dt, ox = d.x, oy = d.y;
+    d.y += dy; d.x += (rnd() - .5) * .45 * dpr; d.left -= dy;
+    wipeLine(ox, oy, d.x, d.y, d.r * .85, .92);
+    if (rnd() < dt * .7) d.stall = .1 + rnd() * .8;
+    d.trail -= dy;
+    if (d.trail < 0) { beads.push({ x: d.x + (rnd() - .5) * d.r, y: d.y - d.r * 1.3, r: d.r * (.25 + rnd() * .25), born: now }); d.trail = d.r * (2 + rnd() * 5); }
+    if (d.left <= 0 || d.y > H + 20) { d.dead = true; beads.push({ x: d.x, y: d.y, r: d.r * .9, born: now }); }
+  }
+  drips = drips.filter(d => !d.dead);
+  beads = beads.filter(b => now - b.born < 90);
+  if (beads.length > 1800) beads.splice(0, beads.length - 1800);
+}
+const gauss = () => (rnd() + rnd() + rnd() - 1.5) / 1.5;
+let fogTick = 0;
+function updateFog(dt) {
+  const b = Math.max(breath.level, spaceHeld ? 1 : 0);
+  let drawing = strokes.size > 0;
+  for (const h of hands.values()) if (h.pen || h.fist) drawing = true;
+  if (drawing || b <= 0) return;                  // pause fogging while drawing, or the line never finishes
+
+  if ((fogTick ^= 1) === 0) return;              // every other frame
+  // a breath: 12 soft blobs, a little below the mouth (breath falls), spread wider than tall (it drifts sideways)
+  const reach = Math.min(W, H) * .43;
+  for (let i = 0; i < 12; i++) {
+    const x = mouth.x + gauss() * reach * .32 * 1.45, y = mouth.y + reach * .12 + gauss() * reach * .32;
+    breathBlob(x, y, reach * (.14 + rnd() * .16), FOG_RATE * b);
+  }
+}
+
+function putDrop(x, y, r, stretch, a) {
+  if (a <= 0) return;
+  const k = clamp(Math.round(r / dpr / 2.5) - 1, 0, 7);
+  wc.globalAlpha = a;
+  wc.drawImage(dropSprites[k], x - r, y - r * (2 * stretch - 1), 2 * r, 2 * r * stretch);
+}
+function drawWater() {
+  wc.setTransform(1, 0, 0, 1, 0, 0); wc.clearRect(0, 0, water.width, water.height);
+  wc.setTransform(ws, 0, 0, ws, 0, 0);
+  for (const d of drops) putDrop(d.x, d.y, d.r, d.slide && d.stall <= 0 ? 1.18 : 1, 1);
+  for (const b of beads) { const age = now - b.born; putDrop(b.x, b.y, b.r, 1, age > 70 ? 1 - (age - 70) / 20 : 1); }
+  for (const d of drips) putDrop(d.x, d.y, d.r, 1.25, 1);
+  wc.globalAlpha = 1;
+}
+
+/* ================= hands ================= */
+// distances in camera pixels, so ratios don't change with the video's shape
+const D = (a, b) => Math.hypot((a.x - b.x) * video.videoWidth, (a.y - b.y) * video.videoHeight);
+const curled = (lm, tip, pip) => D(lm[tip], lm[0]) < D(lm[pip], lm[0]);
+const isFist = lm => curled(lm, 8, 6) && curled(lm, 12, 10) && curled(lm, 16, 14) && curled(lm, 20, 18);
+const pinchGap = lm => D(lm[4], lm[8]) / (D(lm[0], lm[9]) || 1);   // relative to hand size: same near or far
+const brushPx = () => brushCss * dpr;
+
+function handleHands(res) {
+  const seen = new Set();
+  (res.landmarks || []).forEach((lm, n) => {
+    const hd = res.handedness && res.handedness[n] && res.handedness[n][0];
+    const key = (hd ? hd.categoryName : 'h') + n;
+    seen.add(key);
+    let h = hands.get(key);
+    if (!h) { h = { pen: false, fist: false, rel: 0, fistN: 0, mode: '' }; hands.set(key, h); }
+    h.seen = now;
+    const gap = pinchGap(lm), fist = isFist(lm);
+    if (!h.pen) {
+      // pen down: a clear pinch, and only with the index finger out (in a fist the thumb rests on the index and fakes a pinch)
+      if (gap < .22 && !curled(lm, 8, 6) && !fist) { h.pen = true; h.rel = 0; h.snap = true; }
+    } else if (gap > .38) {
+      if (++h.rel >= 2) { h.pen = false; endStroke(h.stroke); h.stroke = null; }   // two released frames before lifting
+    } else h.rel = 0;
+    h.fistN = fist && !h.pen ? h.fistN + 1 : 0;
+    const wasFist = h.fist; h.fist = h.fistN >= 2;
+    if (wasFist && !h.fist) h.wipe = null;
+
+    const P = i => mapV(lm[i].x, lm[i].y);
+    let raw;
+    if (h.fist) { let sx = 0, sy = 0; for (const i of [0, 5, 9, 13, 17]) { const q = P(i); sx += q.x; sy += q.y; } raw = { x: sx / 5, y: sy / 5 }; }
+    else { const a = P(4), b = P(8); raw = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+    const k5 = P(5), k17 = P(17), w0 = P(0), m9 = P(9);
+    // hand width: the larger of two measures, because a fist turned side-on flattens the first
+    h.wipeR = 1.6 * Math.max(Math.hypot(k5.x - k17.x, k5.y - k17.y), Math.hypot(w0.x - m9.x, w0.y - m9.y));
+    const mode = h.fist ? 'fist' : 'pinch';
+    if (h.tx == null || mode !== h.mode) { h.tx = raw.x; h.ty = raw.y; h.bx = raw.x; h.by = raw.y; h.sx = raw.x; h.sy = raw.y; h.mode = mode; }
+    else { h.tx += (raw.x - h.tx) * .45; h.ty += (raw.y - h.ty) * .45; }   // smoothing pass 1
+  });
+  // a hand that vanishes for a moment keeps its pen down; only after 250ms is it gone
+  for (const [k, h] of hands) if (!seen.has(k) && now - h.seen > .25) { endStroke(h.stroke); hands.delete(k); }
+}
+// runs every screen frame: the brush chases the smoothed hand (pass 2), the star chases faster
+function updatePens(dt) {
+  for (const h of hands.values()) {
+    if (h.tx == null) continue;
+    h.sx += (h.tx - h.sx) * .55; h.sy += (h.ty - h.sy) * .55;
+    if (h.snap) { h.bx = h.tx; h.by = h.ty; h.snap = false; }
+    h.bx += (h.tx - h.bx) * .22; h.by += (h.ty - h.by) * .22;
+    if (h.pen) {
+      if (!h.stroke) { h.stroke = newStroke(h.bx, h.by, brushPx()); wipeLine(h.bx, h.by, h.bx, h.by, h.stroke.r, .97); firstWrite(); }
+      h.stroke.r = brushPx();
+      if (Math.hypot(h.bx - h.stroke.cx, h.by - h.stroke.cy) > W * .0006) curveTo(h.stroke, h.bx, h.by, dt);   // ignore tremor
+    } else if (h.fist) {
+      // erase per distance travelled, never per frame: one soft stamp every half-radius, at most 40 a frame
+      const r = h.wipeR, step = r * .5;
+      if (!h.wipe) { h.wipe = { x: h.tx, y: h.ty }; stampSoft(h.tx, h.ty, r, .34); lastWrite = now; continue; }
+      const w = h.wipe, dx = h.tx - w.x, dy = h.ty - w.y; let d = Math.hypot(dx, dy);
+      if (d > Math.max(W, H) * .3) { w.x = h.tx; w.y = h.ty; stampSoft(w.x, w.y, r, .34); continue; }
+      let k = 0;
+      while (d >= step && k < 40) { w.x += dx / Math.hypot(dx, dy) * step; w.y += dy / Math.hypot(dx, dy) * step; stampSoft(w.x, w.y, r, .34); d -= step; k++; lastWrite = now; }
+    }
+  }
+}
+// a very light marker so you know where the pen is, without covering the glass
+function drawHandCursors() {
+  ui.clearRect(0, 0, W, H);
+  for (const h of hands.values()) {
+    if (h.sx == null) continue;
+    ui.save();
+    if (h.fist) {
+      ui.strokeStyle = 'rgba(255,255,255,.12)'; ui.lineWidth = dpr; ui.beginPath(); ui.arc(h.sx, h.sy, h.wipeR, 0, TAU); ui.stroke();
+    } else if (h.pen) {
+      const g = ui.createRadialGradient(h.sx, h.sy, 0, h.sx, h.sy, 6 * dpr);
+      g.addColorStop(0, 'rgba(255,255,255,.55)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      ui.fillStyle = g; ui.beginPath(); ui.arc(h.sx, h.sy, 6 * dpr, 0, TAU); ui.fill();
+    } else {
+      ui.strokeStyle = 'rgba(255,255,255,.2)'; ui.lineWidth = dpr; ui.beginPath(); ui.arc(h.sx, h.sy, brushPx(), 0, TAU); ui.stroke();
+    }
+    ui.restore();
+  }
+}
+let visionErr = false;
+function runVision() {
+  if (!videoReady() || video.currentTime === lastVT) return;
+  lastVT = video.currentTime;
+  const ts = performance.now();
+  try {
+    if (handLm) handleHands(handLm.detectForVideo(video, ts));
+    if (faceDet && (++faceN % 5 === 0)) {
+      const f = faceDet.detectForVideo(video, ts), d = f.detections && f.detections[0];
+      if (d && d.keypoints && d.keypoints[3]) {
+        const p = mapV(d.keypoints[3].x, d.keypoints[3].y);
+        mouth.x += (p.x - mouth.x) * .4; mouth.y += (p.y - mouth.y) * .4;      // trails instead of snapping
+      }
+    }
+  } catch (e) { if (!visionErr) { visionErr = true; console.error(e); } }
+}
+
+/* ================= frame ================= */
+function frame(t) {
+  const dt = last ? Math.min(.05, (t - last) / 1000) : .016; last = t; now += dt;
+  readBreath(dt);
+  runVision();
+  updatePens(dt);
+  updateGust(dt); updateStreaks(dt);
+  updateFog(dt); updateRain(dt); updateWater(dt); updateAudio(dt);
+
+  drawWater();
+  drawCover(b1c, b1.width, b1.height);
+  b2c.drawImage(b1, 0, 0, b2.width, b2.height);
+
+  if (videoReady()) {
+    upload('uVideo', video);
+    const vw = video.videoWidth, vh = video.videoHeight, k = Math.max(W / vw, H / vh);
+    gl.uniform2f(loc.uScale, W / (vw * k), H / (vh * k)); gl.uniform1f(loc.uMirror, 1);
+  } else {
+    if (!placeUploaded) { upload('uVideo', place); placeUploaded = true; }
+    gl.uniform2f(loc.uScale, 1, 1); gl.uniform1f(loc.uMirror, 0);
+  }
+  upload('uBlur', b2);
+  if (maskDirty) { upload('uMask', mask); maskDirty = false; }
+  upload('uWater', water);
+  upload('uStreak', streakCv);
+  gl.uniform2f(loc.uRes, W, H);
+  gl.uniform2f(loc.uBlurTexel, 1 / b2.width, 1 / b2.height);
+  gl.uniform2f(loc.uMaskTexel, 1 / fw, 1 / fh);
+  gl.uniform1f(loc.uDpr, dpr);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  if (saveReq) { saveReq = false; savePng(); }
+
+  drawHandCursors();
+  requestAnimationFrame(frame);
+}
+
+/* ================= touch / mouse ================= */
+const pt = e => ({ x: e.clientX * dpr, y: e.clientY * dpr });
+let quietTimer = 0, wrote = false;
+function firstWrite() {
+  bar.classList.add('quiet'); clearTimeout(quietTimer);
+  quietTimer = setTimeout(() => bar.classList.remove('quiet'), 2500);
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  const p = pt(e), st = newStroke(p.x, p.y, brushPx()); st.t = performance.now();
+  strokes.set(e.pointerId, st);
+  wipeLine(p.x, p.y, p.x, p.y, st.r, .97);
+  firstWrite();
+});
+cv.addEventListener('pointermove', e => {
+  const st = strokes.get(e.pointerId); if (!st) return;
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ev of (evs.length ? evs : [e])) {
+    const p = pt(ev), sdt = Math.max(.004, (performance.now() - st.t) / 1000 / Math.max(1, evs.length));
+    st.r = brushPx(); curveTo(st, p.x, p.y, sdt);
+  }
+  st.t = performance.now(); firstWrite();
+});
+const end = e => { const st = strokes.get(e.pointerId); if (!st) return; endStroke(st); strokes.delete(e.pointerId); };
+cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+
+/* ================= breath, from the microphone ================= */
+// The threshold floats on the room's noise floor: the floor drops quickly to quiet, and rises only very slowly,
+// so a loud room doesn't read as breath and one quiet moment doesn't make every sound read as breath.
+const breath = { level: 0, floor: -1, analyser: null, t: null, quietUntil: 0, frames: 0, sum: 0, seen: false, hold: 0, on: true };
+try { if (JSON.parse(localStorage.getItem('rain-mirror-breath') || 'true') === false) breath.on = false; } catch (e) {}
+meter.setAttribute('aria-pressed', breath.on);
+meter.addEventListener('click', () => {
+  breath.on = !breath.on; meter.setAttribute('aria-pressed', breath.on); breath.hold = 0; breath.level = 0;
+  try { localStorage.setItem('rain-mirror-breath', JSON.stringify(breath.on)); } catch (e) {}
+  setStatus(breath.on ? 'Breath on: breathe on the glass to fog it' : 'Breath off: your writing stays until you hold Space', 3500);
+});
+function setupMic(stream) {
+  const src = ac.createMediaStreamSource(stream), an = ac.createAnalyser();
+  an.fftSize = 1024; an.smoothingTimeConstant = 0; src.connect(an);
+  breath.analyser = an; breath.t = new Float32Array(an.fftSize);
+}
+function readBreath() {
+  const an = breath.analyser;
+  if (!an) { breath.level = 0; return; }
+  an.getFloatTimeDomainData(breath.t);
+  let sum = 0; for (let i = 0; i < breath.t.length; i++) sum += breath.t[i] * breath.t[i];
+  const lvl = Math.sqrt(sum / breath.t.length);
+  // learn the room for half a second before listening, so the first silent samples don't set the floor to zero
+  if (breath.floor < 0) { breath.sum += lvl; if (++breath.frames < 30) { breath.level = 0; return; } breath.floor = breath.sum / breath.frames; }
+  breath.floor += (lvl - breath.floor) * (lvl < breath.floor ? .05 : .0008);
+  const over = lvl - breath.floor;
+  const need = soundOn && recVol > .05 ? .0025 + .02 * recVol : .0025;   // the speakers' own rain must not read as breath
+  const blowing = breath.on && over > need && performance.now() > breath.quietUntil;
+  breath.hold = blowing ? breath.hold + 1 : 0;
+  breath.level = breath.hold >= 12 ? clamp(over / .003, 0, 1) : 0;
+  meterFill.style.width = Math.round(clamp(over / .004, 0, 1) * 100) + '%';
+  if (breath.level > 0 && !breath.seen) { breath.seen = true; setStatus('Breath detected', 2500); }
+  meter.classList.toggle('on', breath.level > 0);
+}
+
+/* ================= sound: a real rain recording ================= */
+// "Rainy" by Ove Melaa, CC0 (public domain), from OpenGameArt. The file isn't made to loop, so two copies
+// take turns: near the end of one, the other starts from the top and they crossfade for a few seconds.
+const RAIN_URL = 'https://opengameart.org/sites/default/files/Ove%20Melaa%20-%20Rainy%20%28NOT%20loopable%29%20Long%20Version.ogg';
+const XFADE = 5;
+let ac = null, master, washG = null, soundOn = false, levelT = 0;
+let rec = [], recIdx = 0, recState = 'idle', xStart = -1, recVol = 0;
+function noiseBuf(type) {
+  const len = ac.sampleRate * 4, b = ac.createBuffer(1, len, ac.sampleRate), d = b.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+  for (let i = 0; i < len; i++) {
+    const w = rnd() * 2 - 1;
+    { b0 = .99886*b0 + w*.0555179; b1 = .99332*b1 + w*.0750759; b2 = .969*b2 + w*.153852; b3 = .8665*b3 + w*.3104856; b4 = .55*b4 + w*.5329522; b5 = -.7616*b5 - w*.016898; d[i] = (b0+b1+b2+b3+b4+b5+b6 + w*.5362) * .11; b6 = w * .115926; }
+  }
+  return b;
+}
+function loop(buf, filterType, freq, q) {
+  const s = ac.createBufferSource(); s.buffer = buf; s.loop = true;
+  const f = ac.createBiquadFilter(); f.type = filterType; f.frequency.value = freq; if (q) f.Q.value = q;
+  const g = ac.createGain(); g.gain.value = 0;
+  s.connect(f).connect(g).connect(master); s.start(0, rnd() * buf.duration); return g;
+}
+function initAudio() {
+  if (ac) return;
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+  } catch (e) { console.error(e); ac = null; }
+}
+function initRecording() {
+  if (rec.length) return;
+  const probe = new Audio();
+  if (!probe.canPlayType('audio/ogg; codecs="vorbis"')) { useFallback('This browser can’t play the rain recording, so you’re hearing a simple stand-in.'); return; }
+  recState = 'loading';
+  for (let i = 0; i < 2; i++) {
+    const a = new Audio(); a.preload = 'auto'; a.src = RAIN_URL; a.volume = 0;
+    a.addEventListener('error', () => useFallback('The rain recording didn’t load (no internet?), so you’re hearing a simple stand-in.'));
+    rec.push(a);
+  }
+  rec[0].addEventListener('playing', () => { if (recState === 'loading') recState = 'ok'; }, { once: true });
+}
+function useFallback(msg) {
+  if (recState === 'fallback') return;
+  recState = 'fallback'; for (const a of rec) a.pause();
+  if (ac && !washG) washG = loop(noiseBuf('pink'), 'lowpass', 1100);
+  setStatus(msg, 6000);
+}
+function rainVolume() { return rain < .02 ? 0 : clamp(.18 + .82 * rainNow(), 0, 1); }   // follows the slider and the gusts
+function updateAudio(dt) {
+  const target = soundOn ? rainVolume() : 0;
+  recVol += (target - recVol) * Math.min(1, dt * 1.5);
+  if (recState === 'ok' || recState === 'loading') {
+    const a = rec[recIdx], b = rec[1 - recIdx];
+    if (a.duration && a.currentTime > a.duration - XFADE && xStart < 0 && soundOn) { b.currentTime = 0; b.play().catch(() => {}); xStart = 1; }
+    let pa = 1, pb = 0;
+    if (xStart >= 0) {
+      // progress comes from the outgoing track's own clock, so the fade can't fall out of step with the audio
+      const p = a.ended ? 1 : clamp((a.currentTime - (a.duration - XFADE)) / XFADE, 0, 1); pa = Math.cos(p * Math.PI / 2); pb = Math.sin(p * Math.PI / 2);
+      if (p >= 1) { a.pause(); recIdx = 1 - recIdx; xStart = -1; pa = pb; pb = 0; }
+    }
+    rec[recIdx].volume = clamp(recVol * (xStart >= 0 ? pa : 1), 0, 1);
+    if (xStart >= 0) rec[1 - recIdx].volume = clamp(recVol * pb, 0, 1);
+    if (!soundOn && recVol < .01) for (const x of rec) if (!x.paused) x.pause();
+  }
+  if (!ac) return;
+  if (washG) { levelT -= dt; if (levelT <= 0) { levelT = .25; washG.gain.setTargetAtTime(recVol * .7, ac.currentTime, .5); } }
+}
+function setLevels() {}
+const soundBtn = document.getElementById('sound');
+soundBtn.addEventListener('click', () => {
+  initAudio(); initRecording();
+  soundOn = !soundOn; soundBtn.setAttribute('aria-pressed', soundOn);
+  if (ac) { if (ac.state === 'suspended') ac.resume(); master.gain.setTargetAtTime(soundOn ? .9 : 0, ac.currentTime, .3); }
+  if (soundOn && recState !== 'fallback' && rec.length) rec[recIdx].play().catch(() => useFallback('The rain recording couldn’t start, so you’re hearing a simple stand-in.'));
+});
+document.addEventListener('visibilitychange', () => { if (ac && !document.hidden) ac.resume(); });
+
+/* ================= start ================= */
+async function getStream() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nocam');
+  const v = { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } };
+  // one request for camera + mic, so there is only one prompt
+  try { return await navigator.mediaDevices.getUserMedia({ video: v, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+  catch (e) {
+    if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) throw e;   // a "no" is final: never ask again
+    return await navigator.mediaDevices.getUserMedia({ video: v, audio: false });     // only when there is no microphone
+  }
+}
+async function loadVision() {
+  setStatus('Loading hand tracking…');
+  try {
+    const v = await import(VISION + '/vision_bundle.mjs');
+    const files = await v.FilesetResolver.forVisionTasks(VISION + '/wasm');
+    const make = async (Cls, url, extra) => {
+      try { return await Cls.createFromOptions(files, { baseOptions: { modelAssetPath: url, delegate: 'GPU' }, runningMode: 'VIDEO', ...extra }); }
+      catch (e) { return await Cls.createFromOptions(files, { baseOptions: { modelAssetPath: url, delegate: 'CPU' }, runningMode: 'VIDEO', ...extra }); }
+    };
+    handLm = await make(v.HandLandmarker, HAND_MODEL, { numHands: 2, minHandDetectionConfidence: .6, minTrackingConfidence: .5 });
+    try { faceDet = await make(v.FaceDetector, FACE_MODEL, {}); } catch (e) { faceDet = null; }
+    setStatus(HELP, 8000);
+  } catch (e) {
+    setStatus('Hand tracking could not load. Touch the screen to write.', 7000);
+  }
+}
+const brushPill = document.getElementById('brushPill');
+function showControls(on) { bar.hidden = !on; brushPill.hidden = !on; }
+document.getElementById('start').addEventListener('click', async () => {
+  initAudio();
+  if (ac && ac.state === 'suspended') ac.resume();
+  try { stream = await getStream(); }
+  catch (e) {
+    note.classList.add('err');
+    note.textContent = (window.self !== window.top)
+      ? 'The camera is blocked inside this app. Open this page as its own website in Safari or Chrome, then tap Start camera.'
+      : (location.protocol === 'file:' ? 'The camera was refused. Opened as a file, so open it from localhost or an https address instead.'
+        : 'The camera was refused. Allow the camera for this site in your browser settings, then try again.');
+    return;
+  }
+  note.classList.remove('err');
+  video = document.createElement('video');
+  video.muted = true; video.playsInline = true; video.setAttribute('playsinline', ''); video.srcObject = stream;
+  await video.play();
+  intro.hidden = true; showControls(true);
+  if (stream.getAudioTracks().length && ac) setupMic(stream);
+  else setStatus('No microphone found, so breath can’t fog the glass. Hold Space instead.', 8000);
+  if (!handLm) loadVision(); else setStatus(HELP, 6000);
+});
+const HELP = 'Pinch to write · fist and swipe to wipe · breathe or hold Space to fog';
+function stopCamera() {
+  if (stream) for (const t of stream.getTracks()) t.stop();
+  stream = null; video = null; lastVT = -1; breath.analyser = null; breath.floor = -1; breath.frames = 0; breath.sum = 0;
+  for (const h of hands.values()) endStroke(h.stroke);
+  hands.clear(); ui.clearRect(0, 0, W, H);
+  placeUploaded = false; showControls(false); intro.hidden = false; setStatus('');
+}
+function savePng() {
+  const a = document.createElement('a');
+  a.href = cv.toDataURL('image/png'); a.download = 'rain-mirror-' + Date.now() + '.png';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+const brushIn = document.getElementById('brush');
+brushIn.addEventListener('input', () => { brushCss = +brushIn.value; });
+const typing = e => e.target && (e.target.tagName === 'INPUT' && e.target.type !== 'range');
+addEventListener('keydown', e => {
+  breath.quietUntil = performance.now() + 300;          // keystrokes are loud on a laptop mic: don't let typing fog the mirror
+  if (typing(e) || intro.hidden === false) return;
+  if (e.code === 'Space') { spaceHeld = true; e.preventDefault(); }
+  else if (e.key === 'c' || e.key === 'C') { resetFog(); beads = []; drips = []; pending = []; }
+  else if (e.key === 's' || e.key === 'S') saveReq = true;
+  else if (e.key === 'Escape') stopCamera();
+});
+addEventListener('keyup', e => { breath.quietUntil = performance.now() + 300; if (e.code === 'Space') spaceHeld = false; });
+addEventListener('blur', () => { spaceHeld = false; });
+addEventListener('pointerdown', () => { if (ac && ac.state === 'suspended') ac.resume(); });
+
+const rainIn = document.getElementById('rain');
+rainIn.value = rain;
+rainIn.addEventListener('input', () => { rain = +rainIn.value; applyRain(); setLevels(); save(); });
+function resetAll() {
+  resetFog(); beads = []; drips = []; pending = [];
+  for (const h of hands.values()) { h.stroke = null; h.wipe = null; }
+  rain = .6; rainIn.value = rain; applyRain(); setLevels();
+  brushCss = 15; brushIn.value = 15; save();
+}
+document.getElementById('reset').addEventListener('click', resetAll);
+
+let rt = 0;
+addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(resize, 120); });
+
+if (location.protocol === 'file:') note.textContent = 'Opened as a file, so your browser will ask for the camera every time. Open it from a web address (localhost or https) and it remembers.';
+if (!gl) {
+  note.classList.add('err'); note.textContent = 'This browser has WebGL turned off, which the glass needs. Try Chrome or Safari.';
+  document.getElementById('start').disabled = true; return;
+}
+try { initGL(); } catch (e) {
+  note.classList.add('err'); note.textContent = 'The glass effect could not start on this device (' + e.message.slice(0, 80) + ').';
+  return;
+}
+buildSprites(); resize();
+applyRain();
+requestAnimationFrame(frame);
+})();
+</script>
+
+</body>
+</html>
